@@ -128,7 +128,7 @@ Memory-mapped register interface (32-bit words, byte-addressable):
 
 ## Simulation Waveform
 
-![AXI4-Lite Simulation Waveform]()
+![AXI4-Lite Simulation Waveform](Waveform.png)
 
 The waveform captures a complete AXI4-Lite transaction:
 
