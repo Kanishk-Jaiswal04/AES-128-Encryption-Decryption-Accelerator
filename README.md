@@ -7,7 +7,6 @@ A high-performance AES-128 encryption/decryption engine in SystemVerilog, integr
 ## Table of Contents
 - [Overview](#overview)
 - [Architecture](#architecture)
-- [S-Box Optimisation](#s-box-optimisation)
 - [AXI4-Lite Interface](#axi4-lite-interface)
 - [UVM Verification Environment](#uvm-verification-environment)
 - [Simulation Waveform](#simulation-waveform)
@@ -23,7 +22,6 @@ A high-performance AES-128 encryption/decryption engine in SystemVerilog, integr
 This project implements a complete AES-128 SoC accelerator with the following highlights:
 
 - Iterative AES-128 engine supporting both encryption and decryption, completing in **11 clock cycles**
-- Canright composite-field S-Box achieving **20% LUT area reduction** and **20% throughput improvement** vs a lookup-table baseline
 - Pipelined AXI4-Lite slave with unified register buffer, Fmax **~102.72 MHz** (WNS +0.265 ns at 100 MHz)
 - Full UVM testbench with constrained-random stimulus, reference predictor, automated scoreboard, and **100% functional coverage** against NIST KAT vectors
 
@@ -47,7 +45,7 @@ This project implements a complete AES-128 SoC accelerator with the following hi
          │  │  (ExpandKey)  │  │
          │  └───────┬───────┘  │
          │  ┌───────▼───────┐  │
-         │  │  SubBytes     │  │  ← Canright composite-field S-Box
+         │  │  SubBytes     │  │
          │  │  ShiftRows    │  │
          │  │  MixColumns   │  │
          │  │  AddRoundKey  │  │
@@ -58,23 +56,6 @@ This project implements a complete AES-128 SoC accelerator with the following hi
 ```
 
 The AES engine is iterative — one round per clock cycle. The encryption and decryption cores run in parallel; `enc_dec_en` steers the start pulse and output mux.
-
----
-
-## S-Box Optimisation
-
-The standard AES S-Box is typically implemented as a 256-entry lookup table (256 x 8-bit ROM), which is expensive in FPGA LUTs when instantiated 16 times per SubBytes operation.
-
-This design implements the **Canright composite-field S-Box** (D. Canright, "A Very Compact S-Box for AES", CHES 2005), which computes the S-Box algebraically using arithmetic in GF(2⁴) subfields rather than storing a lookup table. This trades ROM area for a small combinational logic network.
-
-**Results vs lookup-table baseline on Artix-7:**
-
-| Metric         | LUT Baseline | Canright S-Box | Improvement |
-|----------------|-------------|----------------|-------------|
-| S-Box LUT count | ~320        | ~256           | **~20% reduction** |
-| Throughput      | baseline    | +20%           | **~20% improvement** |
-
-The area saving comes from replacing 16 instantiated 256-entry ROMs with 16 instances of a small combinational GF arithmetic network. The throughput improvement follows from reduced routing congestion and a shorter critical path through the S-Box logic.
 
 ---
 
@@ -128,7 +109,7 @@ Memory-mapped register interface (32-bit words, byte-addressable):
 
 ## Simulation Waveform
 
-![AXI4-Lite Simulation Waveform](Waveform.png)
+![AXI4-Lite Simulation Waveform](waveform.png)
 
 The waveform captures a complete AXI4-Lite transaction:
 
@@ -150,7 +131,6 @@ The waveform captures a complete AXI4-Lite transaction:
 | Throughput                 | 320 Mbps                       |
 | AXI Bus Bandwidth (raw)    | 1.6 Gbps                       |
 | Bus Efficiency             | ~20%                           |
-| S-Box Area Reduction       | ~20% vs LUT baseline           |
 | Functional Coverage        | 100% (NIST KAT verified)       |
 
 ---
@@ -176,7 +156,7 @@ The waveform captures a complete AXI4-Lite transaction:
 ├── AES_decryption_core.v             # Iterative decryption FSM (Equivalent Inverse Cipher)
 ├── AES_AXI_Lite_slave.sv             # AXI4-Lite slave + register map
 ├── ExpandKey.v                       # AES key schedule (one round per call)
-├── SubBytes.v / InvSubBytes.v        # Canright composite-field S-Box (enc/dec)
+├── SubBytes.v / InvSubBytes.v        # Byte substitution using S-Box lookup
 ├── ShiftRows.v / InvShiftRows.v      # Row shift (combinational)
 ├── MixColumns.v / InvMixColumns.v    # Column mix (GF(2^8) arithmetic)
 ├── sbox.v / InvSbox.v                # S-Box and inverse S-Box primitives
