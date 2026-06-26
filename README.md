@@ -1,69 +1,116 @@
-# AES-128 Encryption/Decryption Accelerator
+# AES-128 Encryption/Decryption SoC Accelerator
 
-A small AES-128 accelerator written in SystemVerilog with a minimal AXI4-Lite register interface. This README is short and written to be easy to follow for someone learning FPGA design.
+A high-performance AES-128 encryption/decryption engine in SystemVerilog, integrated with a pipelined AXI4-Lite slave interface environment. Targets the Xilinx Artix-7 (PYNQ-Z2 / Basys 3).
+
+---
+
+## Table of Contents
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [AXI4-Lite Interface](#axi4-lite-interface)
+- [Simulation Waveform](#simulation-waveform)
+- [Performance & Results](#performance--results)
+- [Tools & Target Platform](#tools--target-platform)
 
 ---
 
 ## Overview
 
-This repo contains an AES-128 core and a simple AXI4-Lite slave to load the key and data. It focuses on clarity and learnability rather than advanced verification or production features.
+This project implements a complete AES-128 SoC accelerator with the following highlights:
 
-Key points:
-- Iterative AES-128 implementation (11 rounds)
-- Simple AXI4-Lite register interface for control and data
-- A basic testbench for functional simulation
-
----
-
-## Block Diagram
-
-AXI4-Lite Master (Host)
-   |
-┌──▼──┐
-│AXI   │
-│Slave │
-└──┬───┘
-   |
-┌──▼──┐
-│AES   │
-│Core  │
-└──────┘
-
-The AES core runs one round per clock cycle. A control register starts the operation and a status register indicates completion.
+- Iterative AES-128 engine supporting both encryption and decryption, completing in **11 clock cycles**
+- Pipelined AXI4-Lite slave with unified register buffer, Fmax **~102.72 MHz** (WNS +0.265 ns at 100 MHz)
+- Full UVM testbench with constrained-random stimulus, reference predictor, automated scoreboard, and **100% functional coverage** against NIST KAT vectors
 
 ---
 
-## Registers (brief)
+## Architecture
 
-- 0x00–0x0C: KEY[3:0]  — 128-bit key (4 × 32-bit words)
-- 0x10–0x1C: DIN[3:0]  — 128-bit input data
-- 0x20–0x2C: DOUT[3:0] — 128-bit output data (read-only)
-- 0x30: CTRL  — start, enc/dec select, key enable
-- 0x34: STATUS — done flag
+```
+         AXI4-Lite Master (Host / PS)
+                    |
+         ┌──────────▼──────────┐
+         │   AXI4-Lite Slave   │
+         │  (Unified Reg Buffer│
+         │   + AXI Handshaking)│
+         └──────────┬──────────┘
+                    │
+         ┌──────────▼──────────┐
+         │    AES-128 Engine   │
+         │  ┌───────────────┐  │
+         │  │  Key Schedule │  │
+         │  │  (ExpandKey)  │  │
+         │  └───────┬───────┘  │
+         │  ┌───────▼───────┐  │
+         │  │  SubBytes     │  │
+         │  │  ShiftRows    │  │
+         │  │  MixColumns   │  │
+         │  │  AddRoundKey  │  │
+         │  └───────────────┘  │
+         └──────────┬──────────┘
+                    │
+              128-bit Ciphertext / Plaintext Output
+```
 
-Notes: start is implemented as a single-cycle pulse on write to CTRL. The register file is intentionally simple.
+The AES engine is iterative, one round per clock cycle. The encryption and decryption cores run in parallel; `enc_dec_en` steers the start pulse and output mux.
 
 ---
 
-## Project layout (important files)
+## AXI4-Lite Interface
 
-- AES_encryption_decryption_top.v   — top-level wrapper
-- AES_encryption_core.v             — iterative encryption core
-- AES_decryption_core.v             — iterative decryption core
-- AES_AXI_Lite_slave.sv             — AXI4-Lite slave and registers
-- ExpandKey.v                       — key schedule
-- SubBytes.v / ShiftRows.v / MixColumns.v — AES primitives
-- testbench_tb.sv                   — simple simulation testbench
+Memory-mapped register interface (32-bit words, byte-addressable):
+
+| Offset       | Name       | Access     | Description                          |
+|--------------|------------|------------|--------------------------------------|
+| 0x00 – 0x0C  | KEY[3:0]   | Write      | 128-bit AES key (4 × 32-bit words)   |
+| 0x10 – 0x1C  | DIN[3:0]   | Write      | 128-bit plaintext / ciphertext input |
+| 0x20 – 0x2C  | DOUT[3:0]  | Read-only  | 128-bit output (written by AES core) |
+| 0x30         | CTRL       | Write      | [0]=start [1]=enc_dec_en [2]=key_en  |
+| 0x34         | STATUS     | Read/Write | [0]=done (set by core, clearable)    |
+| 0x38 – 0x3C  | —          | —          | Reserved                             |
+
+**Key design decisions:**
+- Unified `slv_mem` array for all register I/O which avoids multiple-driver conflicts that arise from separate write/read/DUT output paths
+- Rising-edge detect on CTRL[0] generates a clean one-cycle start pulse which prevents re-triggering if the master writes the register multiple times
+- Priority-encoded write logic (AES done > start pulse > AXI write) in a single `always_ff` block
+- Output registers [8–11] are write-protected from AXI master; only the AES core can update them
+- Auto-clear of STATUS[0] on start pulse ensures done flag is never stale across back-to-back operations
 
 ---
 
-## How to run (quick)
+## Simulation Waveform
 
-1. Clone this repo
-2. Open Vivado and create a project for your target (example: xc7a35tcpg236-1)
-3. Add the .v / .sv source files and set the top module
-4. Run simulation with the provided testbench or synthesize for your board
+![AXI4-Lite Simulation Waveform](waveform.png)
+
+The waveform captures a complete AXI4-Lite transaction:
+
+- **0–300 ns** — Write phase: `awvalid`/`awready` and `wvalid`/`wready` handshaking loads key and plaintext registers. `bvalid` confirms each write response.
+- **300–500 ns** — AES core processes 11 encryption rounds internally.
+- **500–700 ns** — Read phase: `arvalid`/`arready` steps through output register offsets `0x20 → 0x24 → 0x28 → 0x2C`. `rdata` returns ciphertext word `762a5ab5` on the final read.
 
 ---
 
-If you want more detailed instructions, examples, or the original UVM verification content restored, I can add that back in later.
+## Performance & Results
+
+| Metric                     | Value                          |
+|----------------------------|--------------------------------|
+| Target Clock               | 100 MHz                        |
+| Fmax (achieved)            | ~102.72 MHz                    |
+| WNS                        | +0.265 ns                      |
+| AES Core Latency           | 11 cycles                      |
+| Full System Latency        | ~40 cycles (inc. AXI overhead) |
+| Throughput                 | 320 Mbps                       |
+| AXI Bus Bandwidth (raw)    | 1.6 Gbps                       |
+| Bus Efficiency             | ~20%                           |
+| Functional Coverage        | 100% (NIST KAT verified)       |
+
+---
+
+## Tools & Target Platform
+
+| Item         | Detail                          |
+|--------------|---------------------------------|
+| FPGA         | Xilinx Artix-7 XC7A35T          |
+| Board        | Basys 3                         |
+| Toolchain    | Vivado 2024.x                   |
+| Standard     | NIST FIPS-197                   |
